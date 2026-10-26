@@ -41,34 +41,65 @@ class AndroidIntegrationTest {
         } finally { server.close();worker.join(1000) }
     }
     @Test fun nativeMediaControllerAcceptsQueueAndPlaybackCommands() {
+        val server = ServerSocket(0)
+        val samples=320000
+        val wav=java.nio.ByteBuffer.allocate(44+samples).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+            .put("RIFF".toByteArray()).putInt(36+samples).put("WAVEfmt ".toByteArray())
+            .putInt(16).putShort(1).putShort(1).putInt(8000).putInt(16000).putShort(2).putShort(16)
+            .put("data".toByteArray()).putInt(samples).put(ByteArray(samples)).array()
+        val worker=thread {
+            while (!server.isClosed) {
+                try {
+                    server.accept().use { socket ->
+                        val reader=socket.getInputStream().bufferedReader();reader.readLine()
+                        var range: String?=null
+                        while (true) {
+                            val line=reader.readLine() ?: break
+                            if (line.isEmpty()) break
+                            if (line.startsWith("Range:",true)) range=line.substringAfter(":").trim()
+                        }
+                        val start=range?.substringAfter("bytes=")?.substringBefore("-")?.toIntOrNull()?.coerceIn(0,wav.size-1) ?: 0
+                        val status=if (range == null) "200 OK" else "206 Partial Content"
+                        val contentRange=if (range == null) "" else "Content-Range: bytes $start-${wav.size-1}/${wav.size}\r\n"
+                        socket.getOutputStream().apply {
+                            write("HTTP/1.1 $status\r\nContent-Type: audio/wav\r\nAccept-Ranges: bytes\r\n${contentRange}Content-Length: ${wav.size-start}\r\nConnection: close\r\n\r\n".toByteArray())
+                            write(wav,start,wav.size-start);flush()
+                        }
+                    }
+                } catch (_: Exception) { }
+            }
+        }
         val context=ApplicationProvider.getApplicationContext<android.content.Context>()
         val instrumentation=InstrumentationRegistry.getInstrumentation()
         lateinit var future: com.google.common.util.concurrent.ListenableFuture<MediaController>
         instrumentation.runOnMainSync { future=MediaController.Builder(context,SessionToken(context,ComponentName(context,PlaybackService::class.java))).buildAsync() }
         val p=future.get(20,TimeUnit.SECONDS)
         try {
-            fun waitFor(check: () -> Boolean) {
-                repeat(100) {
+            fun waitFor(label: String,check: () -> Boolean) {
+                repeat(200) {
                     var ready=false
                     instrumentation.runOnMainSync { ready=check() }
                     if (ready) return
                     Thread.sleep(50)
                 }
-                throw AssertionError("MediaController state did not update")
+                var detail=""
+                instrumentation.runOnMainSync { detail="state=${p.playbackState}, index=${p.currentMediaItemIndex}, count=${p.mediaItemCount}, position=${p.currentPosition}, error=${p.playerError}" }
+                throw AssertionError("MediaController did not reach $label: $detail")
             }
-            instrumentation.runOnMainSync { p.setMediaItems(listOf(MediaItem.fromUri("http://127.0.0.1:1/a"),MediaItem.fromUri("http://127.0.0.1:1/b"))) }
-            waitFor { p.mediaItemCount == 2 }
-            instrumentation.runOnMainSync { p.seekToNextMediaItem() }
-            waitFor { p.currentMediaItemIndex == 1 }
-            instrumentation.runOnMainSync { p.seekToPreviousMediaItem() }
-            waitFor { p.currentMediaItemIndex == 0 }
-            instrumentation.runOnMainSync { p.seekTo(1200) }
-            waitFor { p.currentPosition == 1200L }
+            val origin="http://127.0.0.1:${server.localPort}"
+            instrumentation.runOnMainSync { p.setMediaItems(listOf(MediaItem.fromUri("$origin/a.wav"),MediaItem.fromUri("$origin/b.wav")));p.prepare() }
+            waitFor("ready") { p.mediaItemCount == 2 && p.playbackState == androidx.media3.common.Player.STATE_READY }
             instrumentation.runOnMainSync { p.play() }
-            waitFor { p.playWhenReady }
+            waitFor("playing") { p.isPlaying }
             instrumentation.runOnMainSync { p.pause() }
-            waitFor { !p.playWhenReady }
-        } finally { instrumentation.runOnMainSync { MediaController.releaseFuture(future) } }
+            waitFor("paused") { !p.playWhenReady }
+            instrumentation.runOnMainSync { p.seekToNextMediaItem() }
+            waitFor("next") { p.currentMediaItemIndex == 1 }
+            instrumentation.runOnMainSync { p.seekToPreviousMediaItem() }
+            waitFor("previous") { p.currentMediaItemIndex == 0 }
+            instrumentation.runOnMainSync { p.seekTo(1200) }
+            waitFor("seek") { p.currentPosition == 1200L }
+        } finally { instrumentation.runOnMainSync { MediaController.releaseFuture(future) };server.close();worker.join(1000) }
     }
     @Test fun retainsQueueAcrossActivityRecreation() {
         val scenario=ActivityScenario.launch(MainActivity::class.java)
