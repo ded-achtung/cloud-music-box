@@ -19,5 +19,7 @@ jobs:
         with:
           node-version: '24'
       - run: npm install --no-audit --no-fund
+      - name: Output generated lock file
+        run: base64 -w0 package-lock.json
       - run: npm run build
       - run: npm test
