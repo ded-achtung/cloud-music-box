@@ -193,13 +193,13 @@ test('cache quota pins active readers, evicts only after release, and rejects ov
 });
 
 test('cache recovers published entries and removes partial files after SIGKILL', async () => {
-  const {spawn}=await import('node:child_process');const {once}=await import('node:events');
+  const {spawn}=await import('node:child_process');
   const dir=await mkdtemp(path.join(os.tmpdir(),'music-cache-crash-'));const root=path.join(dir,'music');await mkdir(root);await writeFile(path.join(root,'a.wav'),wav(3,1024*1024));
   const cacheRoot=path.join(dir,'cache');
   const child=spawn(process.execPath,[new URL('./cache-child.js',import.meta.url).pathname,root,cacheRoot],{stdio:['ignore','pipe','pipe']});
   try {
     await new Promise<void>((resolve,reject)=>{let out='';child.stdout.on('data',chunk=>{out+=chunk;if(out.includes('READY'))resolve();});child.once('error',reject);child.once('exit',code=>reject(new Error(`child exited early: ${code}`)));});
-    child.kill('SIGKILL');await once(child,'exit');
+    const exited=new Promise<void>(resolve=>child.once('exit',()=>resolve()));child.kill('SIGKILL');await exited;
     const cache=await VersionCache.open(cacheRoot,1024*1024*1024);
     try {
       const files=await readdir(cacheRoot);assert.equal(files.filter(s=>s.endsWith('.bin')).length,1);assert.ok(!files.some(s=>s.startsWith('.part-')));
