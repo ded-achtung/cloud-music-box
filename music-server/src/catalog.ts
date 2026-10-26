@@ -57,7 +57,7 @@ export class Catalog {
           artwork = hash(picture.data);
           this.db.prepare('INSERT OR IGNORE INTO artworks(hash,mime_type,data) VALUES (?,?,?)').run(artwork, picture.format, picture.data);
         }
-        this.db.prepare(`INSERT INTO tracks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        this.db.prepare(`INSERT INTO tracks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
           ON CONFLICT(source_id,relative_path) DO UPDATE SET fingerprint=excluded.fingerprint,name=excluded.name,title=excluded.title,
           artists_json=excluded.artists_json,album_id=excluded.album_id,album=excluded.album,album_artist=excluded.album_artist,
           duration=excluded.duration,format=excluded.format,mime_type=excluded.mime_type,size=excluded.size,artwork_hash=excluded.artwork_hash`).run(
