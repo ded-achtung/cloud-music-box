@@ -4,7 +4,6 @@ import { mkdtemp, mkdir, writeFile, symlink, rm, rename } from 'node:fs/promises
 import os from 'node:os';
 import path from 'node:path';
 import { Catalog } from '../src/catalog.js';
-import { VersionCache } from '../src/version-cache.js';
 import { LocalStorage } from '../src/storage.js';
 import { buildApp, parseRange } from '../src/app.js';
 
@@ -24,9 +23,8 @@ async function fixture() {
   const first = wav(), second = wav(6000);
   await writeFile(path.join(music,'a.wav'),first); await writeFile(path.join(music,'b.wav'),second);
   const storage = await LocalStorage.create(music), catalog = new Catalog(path.join(dir,'test.sqlite'));
-  const cache=await VersionCache.open(path.join(dir,'cache'),1024*1024*1024);
-  const app = buildApp(catalog,storage,cache);
-  return {dir,music,first,second,storage,catalog,app,cleanup:async()=>{await app.close(); await cache.close(); catalog.close(); await rm(dir,{recursive:true,force:true});}};
+  const app = buildApp(catalog,storage);
+  return {dir,music,first,second,storage,catalog,app,cleanup:async()=>{await app.close(); catalog.close(); await rm(dir,{recursive:true,force:true});}};
 }
 
 test('index, rescan, update and deletion preserve stable IDs', async () => {

@@ -36,9 +36,13 @@ curl -H 'Range: bytes=1024-' -H 'If-Range: "ETAG_FROM_HEAD"' http://127.0.0.1:30
 
 `server-info` publishes the API major/minor and capabilities. List responses contain `items` and `pagination` (`limit`, `offset`, `nextOffset`). Limit is 1–100. Offset pagination can move if a scan changes the catalogue between requests. Errors are `{ "error": { "code": "...", "message": "..." } }`. The update manifest route is reserved and returns 501.
 
-Single byte ranges use 206, unsatisfiable ranges use 416, and unrecognized/multiple range headers are ignored with 200. HEAD returns the full representation's headers. Matching strong `If-Range` ETags permit a partial response; all other If-Range values fall back to the full representation. The first request for a source version creates a private, immutable disk cache entry. Concurrent requests share the preparation; later requests stream only the requested range from it. The source version is checked after copying and content is hashed before atomic publication. A source changed during preparation returns 409; already active readers keep the old version. ETag is the cached content SHA-256. HEAD also prepares a cold file so it can return the same strong ETag as GET. Neither preparation nor streaming loads a full audio file into RAM.
+Single byte ranges use 206, unsatisfiable ranges use 416, and unrecognized/multiple range headers are ignored with 200. HEAD returns the full representation's headers. Matching strong `If-Range` ETags permit a partial response; all other If-Range values fall back to the full representation.
 
-Configure `MUSIC_CACHE_DIR` (default: `audio-cache` next to the database) and `MUSIC_CACHE_MAX_BYTES` (default: 1073741824). Only one server process may use a cache directory. The cache reserves capacity before writing, shares work for identical versions, and evicts least recently used entries without active or waiting readers. When a track is larger than the limit, all space is pinned, or the filesystem reports ENOSPC/EDQUOT, the API returns HTTP 503 with `CACHE_FULL`. Old readers are never evicted to make room for a new version. Allow disk space for the configured limit and other services. On restart the server removes incomplete `.part-*` files, validates completed files by SHA-256 and recovers valid versions. A stale PID lock after a crash is recovered when the process no longer exists; a malformed lock or PID reused by another process requires operator inspection. Cache directory access is restricted to the server user. Sources have an independent `StorageAdapter` contract; cloud providers are not implemented.
+Local tracks are streamed directly from the opened file: the first byte does not wait for the whole track, seeking is a plain byte range, and many phones can listen to different tracks at the same time without extra disk space. Each request opens its own descriptor, so no playback state is shared between clients. The ETag is derived from the file identity, size and timestamps recorded at scan time; it changes whenever the file is rewritten.
+
+A file replaced atomically (written elsewhere and renamed over the old path) keeps playing the old version until the response ends; new requests get 409 `TRACK_CHANGED` until the library is rescanned. A file rewritten in place is detected after every read: if nothing was sent yet the client gets 409 `TRACK_CHANGED`, otherwise the connection is closed, so a client never receives a mix of old and new bytes. Copy new music into the library with an atomic rename (for example `rsync`, which does this by default) rather than overwriting files in place.
+
+`src/version-cache.ts` (a bounded, crash-safe disk cache of immutable track versions) is not used for local files. It is kept for future sources without cheap random access, such as cloud storage. Sources have an independent `StorageAdapter` contract; cloud providers are not implemented.
 
 ## Tests
 
@@ -46,16 +50,13 @@ Configure `MUSIC_CACHE_DIR` (default: `audio-cache` next to the database) and `M
 npm test
 ```
 
-Tests generate WAV fixtures and use temporary SQLite databases. They exercise Fastify injection and real HTTP requests to an ephemeral localhost port, including 20 concurrent cold requests and SIGKILL recovery. The HTTP suite prints CACHE_METRICS with cold and warm time from request to first body byte (TTFB), cache bytes, RSS and process descriptor counts; results depend on CPU, filesystem and runner load. They exercise rescans, seek ranges, concurrent requests, errors, traversal and symlink escapes. A real Android client, physical network, reverse proxy, cloud sources, authentication and updater are outside this stage.
+Tests generate WAV fixtures and use temporary SQLite databases. They exercise Fastify injection and real HTTP requests to an ephemeral localhost port, including twenty listeners playing twenty different tracks at once, client disconnects, atomic and in-place file changes during playback, rescans, seek ranges, errors, traversal and symlink escapes. The cache module has its own quota and SIGKILL recovery tests. The HTTP suite prints STREAM_METRICS with time from request to first body byte (TTFB), RSS and process descriptor counts; results depend on CPU, filesystem and runner load, and RSS includes the test clients and generated fixtures. A real Android client, physical network, reverse proxy, cloud sources, authentication and updater are outside this stage.
 
-Example CI measurement on GitHub Actions Ubuntu 24.04 / Node 24.21.0, using an 8,388,652-byte WAV and 20 concurrent local HTTP Range clients ([run](https://github.com/ded-achtung/cloud-music-box/actions/runs/40408937559)):
+Time to first audio byte on one Linux VM (Node 24.22.1, file already in the page cache, after a warm-up request), compared with the previous copy-to-cache implementation:
 
-| Metric | Result |
-| --- | ---: |
-| Cold time to first body byte | 24.00 ms |
-| Warm time to first body byte | 1.51 ms |
-| Data held on disk for the tested version | 8,388,652 bytes (one cached file) |
-| Process RSS before / sampled peak / after | 172,535,808 / 172,666,880 / 172,666,880 bytes |
-| Process file descriptors before / sampled peak / after | 28 / 60 / 28 |
+| Track size | Copy to cache first (v0.1.0) | Direct streaming |
+| ---: | ---: | ---: |
+| 8 MB | 247 ms | 22 ms |
+| 150 MB | 6,009 ms | 15 ms |
 
-This is one in-process client-and-server sample, not a throughput benchmark or a prediction for real devices; RSS is sampled and includes the test clients and generated fixtures. Preparation and startup hash verification depend on track size and disk speed. If every client disconnects while a shared preparation is running, the bounded preparation can finish and remain reusable.
+This is a single local sample, not a throughput benchmark or a prediction for real devices or networks.
