@@ -15,7 +15,13 @@ npm run build
 MUSIC_ROOT="$HOME/Music" npm start
 ```
 
-The server scans on startup. To update the catalogue while running, stop the server and start it again, or use a separate scan and restart (`MUSIC_ROOT="$HOME/Music" npm run scan`). Store its database outside the music directory, using `MUSIC_DB=/absolute/path/catalog.sqlite`. The default is `./data/catalog.sqlite`; SQLite migrations run automatically. Changing the configured root creates a new local library, so use a separate DB for each root. ID stability applies to an unchanged path in the same database; renames create a new ID.
+The server starts answering at once with the catalogue it already has and scans the library in the background. While it runs it keeps the catalogue up to date without a restart:
+
+- a file watcher on `MUSIC_ROOT` rescans 3 seconds after the folder goes quiet, so a long copy is scanned once it finishes (`MUSIC_WATCH=0` disables the watcher);
+- a periodic scan catches anything the watcher missed, every `MUSIC_SCAN_INTERVAL_SECONDS` (default 900; `0` disables it);
+- `kill -HUP <pid>` (or `systemctl kill -s HUP <unit>`) requests a scan by hand.
+
+Only one scan runs at a time; requests during a scan are merged into one follow-up scan. A failed scan (for example, an unmounted music folder) is logged, removes no tracks and is retried on the next trigger. Tracks appear as they are indexed; files that are still being copied may be indexed with partial metadata and are corrected by the scan that follows the copy. `npm run scan` scans once and exits; it is meant for when the server is stopped. Store its database outside the music directory, using `MUSIC_DB=/absolute/path/catalog.sqlite`. The default is `./data/catalog.sqlite`; SQLite migrations run automatically. Changing the configured root creates a new local library, so use a separate DB for each root. ID stability applies to an unchanged path in the same database; renames create a new ID.
 
 By default the server listens only on `127.0.0.1:3000`. Explicitly set `HOST=0.0.0.0` to make it reachable on the local network, and `PORT=3000` to choose a port. Firewall and transport protection are the operator's responsibility. No network configuration is changed by this repository. Do not put personal music, DB files, or credentials into git.
 
@@ -34,7 +40,7 @@ curl -H 'Range: bytes=-256' http://127.0.0.1:3000/api/v1/tracks/TRACK_ID/stream 
 curl -H 'Range: bytes=1024-' -H 'If-Range: "ETAG_FROM_HEAD"' http://127.0.0.1:3000/api/v1/tracks/TRACK_ID/stream -o rest.bin
 ```
 
-`server-info` publishes the API major/minor and capabilities. List responses contain `items` and `pagination` (`limit`, `offset`, `nextOffset`). Limit is 1–100. Offset pagination can move if a scan changes the catalogue between requests. Errors are `{ "error": { "code": "...", "message": "..." } }`. The update manifest route is reserved and returns 501.
+`server-info` publishes the API major/minor and capabilities. Since API 1.1 it also reports `library`: `scanning`, `lastScanAt`, `lastScanOk` and an opaque `revision` that changes whenever a scan may have changed the catalogue; clients compare it for equality to know when to reload the track list. List responses contain `items` and `pagination` (`limit`, `offset`, `nextOffset`). Limit is 1–100. Offset pagination can move if a scan changes the catalogue between requests. Errors are `{ "error": { "code": "...", "message": "..." } }`. The update manifest route is reserved and returns 501.
 
 Single byte ranges use 206, unsatisfiable ranges use 416, and unrecognized/multiple range headers are ignored with 200. HEAD returns the full representation's headers. Matching strong `If-Range` ETags permit a partial response; all other If-Range values fall back to the full representation.
 
