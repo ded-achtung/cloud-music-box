@@ -37,14 +37,12 @@ export class Catalog {
       let handle;
       try {
         handle = await storage.open(entry.key);
-        const stat = await handle.stat();
-        const current = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+        const current = handle.fingerprint;
         if (current !== entry.fingerprint) throw new Error('File changed during scan');
-        const stream = handle.createReadStream({ autoClose: false });
-        const metadata = await parseStream(stream, { mimeType: formats[path.extname(entry.key).toLowerCase()], size: stat.size }, { duration: true });
+        const stream = handle.stream({ autoClose: false });
+        const metadata = await parseStream(stream, { mimeType: formats[path.extname(entry.key).toLowerCase()], size: handle.size }, { duration: true });
         stream.destroy();
-        const after = await handle.stat();
-        if (`${after.dev}:${after.ino}:${after.size}:${after.mtimeMs}:${after.ctimeMs}` !== current) throw new Error('File changed during scan');
+        if (!await handle.unchanged()) throw new Error('File changed during scan');
         const name = path.basename(entry.key);
         const title = metadata.common.title || name;
         const artists = metadata.common.artists?.length ? metadata.common.artists : metadata.common.artist ? [metadata.common.artist] : [];
@@ -63,7 +61,7 @@ export class Catalog {
           duration=excluded.duration,format=excluded.format,mime_type=excluded.mime_type,size=excluded.size,artwork_hash=excluded.artwork_hash`).run(
           old?.id || randomUUID(), storage.sourceId, entry.key, current, name, title, JSON.stringify(artists), albumId, album,
           albumArtist, Number.isFinite(metadata.format.duration) ? metadata.format.duration! : null,
-          path.extname(entry.key).slice(1).toLowerCase(), formats[path.extname(entry.key).toLowerCase()], stat.size, artwork);
+          path.extname(entry.key).slice(1).toLowerCase(), formats[path.extname(entry.key).toLowerCase()], handle.size, artwork);
         old ? result.updated++ : result.added++;
       } catch (error) { result.failed++; console.error(`Cannot index ${entry.key}:`, error); }
       finally { await handle?.close(); }

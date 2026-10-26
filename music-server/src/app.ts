@@ -65,22 +65,21 @@ export function buildApp(catalog: Catalog, storage: StorageAdapter) {
     try { file = await storage.open(t.relative_path); }
     catch { throw new ApiError(404,'TRACK_UNAVAILABLE','Track is unavailable'); }
     try {
-      const stat = await file.stat();
-      const fingerprint = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+      const { size, fingerprint } = file;
       if (fingerprint !== t.fingerprint) throw new ApiError(409,'TRACK_CHANGED','Track changed; rescan library');
       const etag = `"${createHash('sha256').update(fingerprint).digest('hex')}"`;
       reply.header('Accept-Ranges','bytes').header('ETag',etag).type(t.mime_type);
       const range = req.method === 'GET' && req.headers.range && (!req.headers['if-range'] || req.headers['if-range'] === etag)
-        ? parseRange(req.headers.range,stat.size) : 'ignore';
+        ? parseRange(req.headers.range,size) : 'ignore';
       if (range === 'unsatisfiable') {
         await file.close();
-        return reply.code(416).type('application/json').header('Content-Range',`bytes */${stat.size}`).send({error:{code:'RANGE_NOT_SATISFIABLE',message:'Range not satisfiable'}});
+        return reply.code(416).type('application/json').header('Content-Range',`bytes */${size}`).send({error:{code:'RANGE_NOT_SATISFIABLE',message:'Range not satisfiable'}});
       }
       if (range !== 'ignore') {
-        reply.code(206).header('Content-Range',`bytes ${range.start}-${range.end}/${stat.size}`).header('Content-Length', range.end-range.start+1);
-      } else reply.header('Content-Length',stat.size);
-      if (req.method === 'HEAD' || stat.size === 0) { await file.close(); return reply.send(); }
-      const body = file.createReadStream({start:range === 'ignore' ? 0 : range.start, end:range === 'ignore' ? stat.size-1 : range.end, autoClose:true});
+        reply.code(206).header('Content-Range',`bytes ${range.start}-${range.end}/${size}`).header('Content-Length', range.end-range.start+1);
+      } else reply.header('Content-Length',size);
+      if (req.method === 'HEAD' || size === 0) { await file.close(); return reply.send(); }
+      const body = file.stream({start:range === 'ignore' ? 0 : range.start, end:range === 'ignore' ? size-1 : range.end, autoClose:true});
       reply.raw.on('close', () => body.destroy());
       return reply.send(body);
     } catch (error) { await file.close().catch(() => {}); throw error; }

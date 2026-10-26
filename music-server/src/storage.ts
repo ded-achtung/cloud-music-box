@@ -1,13 +1,19 @@
 import { constants } from 'node:fs';
 import { open, readdir, realpath } from 'node:fs/promises';
-import type { FileHandle } from 'node:fs/promises';
+import type { Readable } from 'node:stream';
 import path from 'node:path';
 
-export interface StorageEntry { key: string; size: number; mtimeMs: number; fingerprint: string }
+export interface StorageEntry { key: string; size: number; fingerprint: string }
+export interface OpenedObject {
+  size: number; fingerprint: string;
+  stream(options?: { start?: number; end?: number; autoClose?: boolean }): Readable;
+  unchanged(): Promise<boolean>;
+  close(): Promise<void>;
+}
 export interface StorageAdapter {
   readonly sourceId: string;
   list(): AsyncIterable<StorageEntry>;
-  open(key: string): Promise<FileHandle>;
+  open(key: string): Promise<OpenedObject>;
 }
 
 export const formats: Record<string, string> = {
@@ -27,7 +33,7 @@ export class LocalStorage implements StorageAdapter {
     await handle.close();
     return new LocalStorage(canonical);
   }
-  async open(key: string): Promise<FileHandle> {
+  async open(key: string): Promise<OpenedObject> {
     if (!key || path.isAbsolute(key) || key.split('/').some(p => !p || p === '.' || p === '..')) {
       throw new Error('Invalid storage key');
     }
@@ -39,7 +45,10 @@ export class LocalStorage implements StorageAdapter {
       if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) || !stat.isFile()) {
         throw new Error('File outside storage root');
       }
-      return handle;
+      const fingerprint = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+      return { size: stat.size, fingerprint, stream: opts => handle.createReadStream(opts),
+        unchanged: async () => { const s = await handle.stat(); return `${s.dev}:${s.ino}:${s.size}:${s.mtimeMs}:${s.ctimeMs}` === fingerprint; },
+        close: () => handle.close() };
     } catch (error) { await handle.close(); throw error; }
   }
   async *list(): AsyncIterable<StorageEntry> {
@@ -52,8 +61,7 @@ export class LocalStorage implements StorageAdapter {
         if (!entry.isFile() || !formats[path.extname(key).toLowerCase()]) continue;
         const handle = await self.open(key);
         try {
-          const stat = await handle.stat();
-          yield { key, size: stat.size, mtimeMs: stat.mtimeMs, fingerprint: `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}` };
+          yield { key, size: handle.size, fingerprint: handle.fingerprint };
         } finally { await handle.close(); }
       }
     };
