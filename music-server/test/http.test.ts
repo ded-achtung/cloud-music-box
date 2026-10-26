@@ -143,12 +143,18 @@ test('twenty concurrent listeners share one immutable cached version and report 
     const rssBefore=process.memoryUsage().rss, fdBefore=(await readdir('/proc/self/fd')).length;
     let peakRss=rssBefore, peakFds=fdBefore;
     const sampler=setInterval(()=>{peakRss=Math.max(peakRss,process.memoryUsage().rss);peakFds=Math.max(peakFds,readdirSync('/proc/self/fd').length);},2);sampler.unref();
+    const receiveFirst=async (r:IncomingMessage,started:number) => {
+      const first=await new Promise<{chunk:Buffer;ms:number}>((resolve,reject)=>{
+        r.once('data',chunk=>{r.pause();resolve({chunk:Buffer.from(chunk),ms:performance.now()-started});});r.once('error',reject);
+      });
+      r.resume();return {ms:first.ms,data:Buffer.concat([first.chunk,await body(r)])};
+    };
     const coldStart=performance.now(); const cold=await get(f.base,url,{Range:'bytes=0-1023'});
-    const coldMs=performance.now()-coldStart; assert.equal(cold.statusCode,206);assert.deepEqual(await body(cold),f.a.subarray(0,1024));
+    const coldResult=await receiveFirst(cold,coldStart),coldMs=coldResult.ms;assert.equal(cold.statusCode,206);assert.deepEqual(coldResult.data,f.a.subarray(0,1024));
     const filesBefore=(await readdir(cacheRoot)).filter(s=>s.endsWith('.bin'));assert.equal(filesBefore.length,1);
     const infoBefore=await import('node:fs/promises').then(m=>m.stat(path.join(cacheRoot,filesBefore[0])));
     const warmStart=performance.now(); const warm=await get(f.base,url,{Range:'bytes=256-1279'});
-    const warmMs=performance.now()-warmStart;assert.deepEqual(await body(warm),f.a.subarray(256,1280));
+    const warmResult=await receiveFirst(warm,warmStart),warmMs=warmResult.ms;assert.deepEqual(warmResult.data,f.a.subarray(256,1280));
     const results=await Promise.all(Array.from({length:20},(_,i)=>get(f.base,url,{Range:`bytes=${i*10}-${i*10+31}`})));
     const payloads=await Promise.all(results.map(body));
     results.forEach((r,i)=>{assert.equal(r.statusCode,206);assert.deepEqual(payloads[i],f.a.subarray(i*10,i*10+32));});
