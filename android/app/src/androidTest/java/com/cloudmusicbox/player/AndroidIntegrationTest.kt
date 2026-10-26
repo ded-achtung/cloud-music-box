@@ -109,6 +109,20 @@ class AndroidIntegrationTest {
                 Thread.sleep(100)
             }
             assertTrue("Bundled React UI or native bridge did not load",loaded)
+            InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                view.evaluateJavascript("""window.__bridgeCheck='waiting'; const saved=NativeMusic.onmessage; NativeMusic.onmessage=e=>{const m=JSON.parse(e.data);if(m.id===2147483000)window.__bridgeCheck=m.result?'ok':'error';if(saved)saved(e)}; NativeMusic.postMessage(JSON.stringify({id:2147483000,action:'config'}));""",null)
+            }
+            var bridgeOk=false
+            repeat(100) {
+                val latch=CountDownLatch(1);val result=AtomicReference<String>()
+                InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                    view.evaluateJavascript("window.__bridgeCheck") { value -> result.set(value);latch.countDown() }
+                }
+                latch.await(3,TimeUnit.SECONDS)
+                if (result.get() == "\"ok\"") { bridgeOk=true; return@repeat }
+                Thread.sleep(100)
+            }
+            assertTrue("Native bridge did not answer",bridgeOk)
         } finally { scenario.close() }
     }
 
