@@ -25,7 +25,7 @@ export const formats: Record<string, string> = {
 // with a symlink between path validation and open cannot escape the root.
 export class LocalStorage implements StorageAdapter {
   readonly sourceId = 'local';
-  private constructor(private readonly root: string) {}
+  private constructor(readonly root: string) {}
   static async create(root: string): Promise<LocalStorage> {
     if (process.platform !== 'linux') throw new Error('LocalStorage requires Linux /proc/self/fd');
     const canonical = await realpath(root);

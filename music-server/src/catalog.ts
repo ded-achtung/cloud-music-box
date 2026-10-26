@@ -11,12 +11,14 @@ export interface TrackRow {
   album_artist: string; duration: number | null; format: string; mime_type: string;
   size: number; artwork_hash: string | null;
 }
+export interface ScanResult { added: number; updated: number; unchanged: number; removed: number; failed: number }
 const hash = (s: string | Uint8Array) => createHash('sha256').update(s).digest('hex');
 export class Catalog {
   readonly db: DatabaseSync;
   constructor(file: string) {
     this.db = new DatabaseSync(file);
-    this.db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)');
+    // The catalogue can be rebuilt by a rescan, so WAL with synchronous=NORMAL is enough durability.
+    this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)');
     const applied = this.db.prepare('SELECT version FROM schema_migrations WHERE version = 1').get();
     if (!applied) {
       const sql = readFileSync(new URL('../../migrations/001_initial.sql', import.meta.url), 'utf8');
@@ -27,10 +29,11 @@ export class Catalog {
   }
   close() { this.db.close(); }
   get(id: string): TrackRow | undefined { return this.db.prepare('SELECT * FROM tracks WHERE id=?').get(id) as unknown as TrackRow | undefined; }
-  async scan(storage: StorageAdapter): Promise<{ added: number; updated: number; unchanged: number; removed: number; failed: number }> {
+  async scan(storage: StorageAdapter, signal?: AbortSignal): Promise<ScanResult> {
     const result = { added: 0, updated: 0, unchanged: 0, removed: 0, failed: 0 };
     const seen = new Set<string>();
     for await (const entry of storage.list()) {
+      signal?.throwIfAborted();
       seen.add(entry.key);
       const old = this.db.prepare('SELECT * FROM tracks WHERE source_id=? AND relative_path=?').get(storage.sourceId, entry.key) as unknown as TrackRow | undefined;
       if (old?.fingerprint === entry.fingerprint) { result.unchanged++; continue; }
@@ -67,10 +70,15 @@ export class Catalog {
       } catch (error) { result.failed++; console.error(`Cannot index ${entry.key}:`, error); }
       finally { await handle?.close(); }
     }
-    // Deletion only after a complete directory traversal; a failed traversal throws.
+    // Deletion only after a complete directory traversal; a failed or aborted traversal throws.
+    signal?.throwIfAborted();
     const rows = this.db.prepare('SELECT id,relative_path FROM tracks WHERE source_id=?').all(storage.sourceId) as unknown as {id:string;relative_path:string}[];
-    for (const row of rows) if (!seen.has(row.relative_path)) { this.db.prepare('DELETE FROM tracks WHERE id=?').run(row.id); result.removed++; }
-    this.db.exec('DELETE FROM artworks WHERE hash NOT IN (SELECT artwork_hash FROM tracks WHERE artwork_hash IS NOT NULL)');
+    this.db.exec('BEGIN');
+    try {
+      for (const row of rows) if (!seen.has(row.relative_path)) { this.db.prepare('DELETE FROM tracks WHERE id=?').run(row.id); result.removed++; }
+      this.db.exec('DELETE FROM artworks WHERE hash NOT IN (SELECT artwork_hash FROM tracks WHERE artwork_hash IS NOT NULL)');
+      this.db.exec('COMMIT');
+    } catch (e) { this.db.exec('ROLLBACK'); throw e; }
     return result;
   }
 }
