@@ -46,8 +46,9 @@ export class LocalStorage implements StorageAdapter {
         throw new Error('File outside storage root');
       }
       const fingerprint = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+      // Content check only: unlinking or renaming an open file changes its ctime, not its bytes.
       return { size: stat.size, fingerprint, stream: opts => handle.createReadStream(opts),
-        unchanged: async () => { const s = await handle.stat(); return `${s.dev}:${s.ino}:${s.size}:${s.mtimeMs}:${s.ctimeMs}` === fingerprint; },
+        unchanged: async () => { const s = await handle.stat(); return s.size === stat.size && s.mtimeMs === stat.mtimeMs; },
         close: () => handle.close() };
     } catch (error) { await handle.close(); throw error; }
   }

@@ -1,6 +1,6 @@
 import Fastify from 'fastify';
-import { createReadStream } from 'node:fs';
-import { CacheError, VersionCache } from './version-cache.js';
+import { createHash } from 'node:crypto';
+import { Transform, pipeline } from 'node:stream';
 import { Catalog, trackDTO, type TrackRow } from './catalog.js';
 import type { StorageAdapter } from './storage.js';
 
@@ -27,10 +27,10 @@ export function parseRange(header: string, size: number): ByteRange {
   if (size === 0 || (a === undefined && b === 0) || (a !== undefined && (a >= size || (b !== undefined && b < a)))) return 'unsatisfiable';
   return a === undefined ? { start: Math.max(0, size - b!), end: size - 1 } : { start: a, end: Math.min(b ?? size - 1, size - 1) };
 }
-export function buildApp(catalog: Catalog, storage: StorageAdapter, cache: VersionCache) {
+export function buildApp(catalog: Catalog, storage: StorageAdapter) {
   const app = Fastify({ logger: false, exposeHeadRoutes: false });
   app.setErrorHandler((err, _req, reply) => {
-    const e = err instanceof ApiError ? err : err instanceof CacheError ? new ApiError(err.code === 'CACHE_FULL' ? 503 : 409,err.code,err.message) : new ApiError(500, 'INTERNAL_ERROR', 'Internal server error');
+    const e = err instanceof ApiError ? err : new ApiError(500, 'INTERNAL_ERROR', 'Internal server error');
     if (e.status === 500) app.log.error(err);
     reply.removeHeader('Content-Range').removeHeader('Content-Length').type('application/json');
     void reply.code(e.status).send({ error: { code: e.code, message: e.message } });
@@ -60,35 +60,39 @@ export function buildApp(catalog: Catalog, storage: StorageAdapter, cache: Versi
   });
   // Reserved without exposing an administrative surface or implying an updater exists.
   app.get('/updates/android/stable/manifest.json', async () => { throw new ApiError(501,'NOT_IMPLEMENTED','Android updates are not available'); });
+  // Local files stream straight from the opened descriptor: no copy, so the first byte
+  // does not wait for the whole track and concurrent listeners need no cache space.
   const stream = async (req: import('fastify').FastifyRequest, reply: import('fastify').FastifyReply) => {
     const t = catalog.get((req.params as {id:string}).id);
     if (!t || t.source_id !== storage.sourceId) throw new ApiError(404,'TRACK_NOT_FOUND','Track not found');
     let file;
     try { file = await storage.open(t.relative_path); }
     catch { throw new ApiError(404,'TRACK_UNAVAILABLE','Track is unavailable'); }
-    let lease: Awaited<ReturnType<VersionCache['acquire']>> | undefined;
     try {
       const { size, fingerprint } = file;
       if (fingerprint !== t.fingerprint) throw new ApiError(409,'TRACK_CHANGED','Track changed; rescan library');
-      lease = await cache.acquire(storage.sourceId,t.relative_path,file);
-      await file.close();
-      if (reply.raw.destroyed) { lease.release(); return reply; }
-      reply.header('Accept-Ranges','bytes').header('ETag',lease.etag).type(t.mime_type);
-      const range = req.method === 'GET' && req.headers.range && (!req.headers['if-range'] || req.headers['if-range'] === lease.etag)
+      const etag = `"${createHash('sha256').update(JSON.stringify([storage.sourceId,t.relative_path,fingerprint])).digest('hex')}"`;
+      reply.header('Accept-Ranges','bytes').header('ETag',etag).type(t.mime_type);
+      const range = req.method === 'GET' && req.headers.range && (!req.headers['if-range'] || req.headers['if-range'] === etag)
         ? parseRange(req.headers.range,size) : 'ignore';
       if (range === 'unsatisfiable') {
-        lease.release();
+        await file.close();
         return reply.code(416).type('application/json').header('Content-Range',`bytes */${size}`).send({error:{code:'RANGE_NOT_SATISFIABLE',message:'Range not satisfiable'}});
       }
       if (range !== 'ignore') reply.code(206).header('Content-Range',`bytes ${range.start}-${range.end}/${size}`).header('Content-Length',range.end-range.start+1);
       else reply.header('Content-Length',size);
-      if (req.method === 'HEAD' || size === 0) { lease.release(); return reply.send(); }
-      const active=lease;
-      const body=createReadStream(active.path,{start:range === 'ignore' ? 0 : range.start,end:range === 'ignore' ? size-1 : range.end});
-      body.once('close',()=>active.release());
-      reply.raw.once('close',()=>body.destroy());
-      return reply.send(body);
-    } catch (error) { lease?.release(); await file.close().catch(() => {}); throw error; }
+      if (req.method === 'HEAD' || size === 0) { await file.close(); return reply.send(); }
+      const opened = file;
+      const source = opened.stream({start:range === 'ignore' ? 0 : range.start,end:range === 'ignore' ? size-1 : range.end,autoClose:false});
+      // Check the descriptor after each read: an in-place rewrite aborts the response
+      // instead of mixing old and new bytes. Atomic replacement keeps the old inode.
+      const guard = new Transform({transform(chunk:Buffer,_encoding,callback) {
+        opened.unchanged().then(same => same ? callback(null,chunk) : callback(new ApiError(409,'TRACK_CHANGED','Track changed during streaming')),callback);
+      }});
+      pipeline(source,guard,() => { void opened.close().catch(() => {}); });
+      reply.raw.once('close',()=>guard.destroy());
+      return reply.send(guard);
+    } catch (error) { await file.close().catch(() => {}); throw error; }
   };
   app.route({ method: ['GET','HEAD'], url: '/api/v1/tracks/:id/stream', handler: stream });
   return app;
