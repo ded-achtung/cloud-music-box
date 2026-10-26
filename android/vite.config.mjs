@@ -4,5 +4,5 @@ const here=path.dirname(fileURLToPath(import.meta.url))
 export default {
   root:path.join(here,'ui'), base:'./',
   esbuild:{jsx:'automatic'},
-  build:{outDir:path.join(here,'app/src/main/assets/ui'),emptyOutDir:true},
+  build:{outDir:path.join(here,'app/src/main/assets/ui'),emptyOutDir:true, rollupOptions:{onwarn(warning, warn){if(warning.code !== 'MODULE_LEVEL_DIRECTIVE') warn(warning)}}},
 }
