@@ -164,6 +164,7 @@ test('twenty concurrent listeners share one immutable cached version and report 
     await assertNoDescriptors(f.root);
     clearInterval(sampler);
     const rssAfter=process.memoryUsage().rss, fdAfter=(await readdir('/proc/self/fd')).length;
+    peakRss=Math.max(peakRss,rssAfter);peakFds=Math.max(peakFds,fdAfter);
     assert.ok(peakRss-rssBefore < 128*1024*1024);
     console.log(`CACHE_METRICS cold_ttfb_ms=${coldMs.toFixed(2)} warm_ttfb_ms=${warmMs.toFixed(2)} cache_bytes=${infoAfter.size} rss_before=${rssBefore} rss_peak=${peakRss} rss_after=${rssAfter} fds_before=${fdBefore} fds_peak=${peakFds} fds_after=${fdAfter}`);
   } finally {await f.cleanup();}
