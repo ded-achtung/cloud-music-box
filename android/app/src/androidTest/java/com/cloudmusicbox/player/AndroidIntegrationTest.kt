@@ -5,6 +5,8 @@ import androidx.media3.common.MediaItem
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import androidx.test.core.app.ApplicationProvider
+import androidx.test.core.app.ActivityScenario
+import androidx.lifecycle.ViewModelProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.*
@@ -52,4 +54,21 @@ class AndroidIntegrationTest {
             }
         } finally { instrumentation.runOnMainSync { MediaController.releaseFuture(future) } }
     }
+    @Test fun retainsQueueAcrossActivityRecreation() {
+        val scenario=ActivityScenario.launch(MainActivity::class.java)
+        try {
+            lateinit var first: com.google.common.util.concurrent.ListenableFuture<MediaController>
+            scenario.onActivity { first=ViewModelProvider(it)[ControllerHolder::class.java].future }
+            val player=first.get(20,TimeUnit.SECONDS)
+            InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                player.setMediaItems(listOf(MediaItem.fromUri("http://127.0.0.1:1/a"),MediaItem.fromUri("http://127.0.0.1:1/b")))
+            }
+            scenario.recreate()
+            scenario.onActivity {
+                assertSame(first,ViewModelProvider(it)[ControllerHolder::class.java].future)
+                assertEquals(2,player.mediaItemCount)
+            }
+        } finally { scenario.close() }
+    }
+
 }
