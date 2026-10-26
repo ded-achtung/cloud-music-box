@@ -74,7 +74,7 @@ export function buildApp(catalog: Catalog, storage: StorageAdapter) {
         ? parseRange(req.headers.range,stat.size) : 'ignore';
       if (range === 'unsatisfiable') {
         await file.close();
-        return reply.code(416).header('Content-Range',`bytes */${stat.size}`).send({error:{code:'RANGE_NOT_SATISFIABLE',message:'Range not satisfiable'}});
+        return reply.code(416).type('application/json').header('Content-Range',`bytes */${stat.size}`).send({error:{code:'RANGE_NOT_SATISFIABLE',message:'Range not satisfiable'}});
       }
       if (range !== 'ignore') {
         reply.code(206).header('Content-Range',`bytes ${range.start}-${range.end}/${stat.size}`).header('Content-Length', range.end-range.start+1);
