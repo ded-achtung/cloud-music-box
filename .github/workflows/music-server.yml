@@ -3,7 +3,7 @@ on:
   pull_request:
     paths: ['music-server/**', '.github/workflows/music-server.yml']
   push:
-    branches: ['feature/music-server-v0.1']
+    branches: ['main', 'feature/music-server-v0.1']
     paths: ['music-server/**', '.github/workflows/music-server.yml']
 permissions:
   contents: read
