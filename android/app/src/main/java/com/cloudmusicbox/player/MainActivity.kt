@@ -9,6 +9,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.ViewModelProvider
 import androidx.media3.common.C
@@ -53,7 +54,14 @@ class MainActivity : ComponentActivity() {
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? = loader.shouldInterceptRequest(request.url)
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean = request.url.toString() != "$origin/assets/ui/index.html"
         }
-        check(WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) { "Android System WebView is too old" }
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+            setContentView(TextView(this).apply {
+                text = "Обновите Android System WebView и перезапустите приложение."
+                textSize = 18f
+                setPadding(32, 64, 32, 32)
+            })
+            return
+        }
         WebViewCompat.addWebMessageListener(web, "NativeMusic", setOf(origin), object : WebViewCompat.WebMessageListener {
             override fun onPostMessage(view: WebView, message: WebMessageCompat, sourceOrigin: Uri, isMainFrame: Boolean, replyProxy: JavaScriptReplyProxy) {
                 if (!isMainFrame || sourceOrigin.toString() != origin) return
