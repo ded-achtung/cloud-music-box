@@ -124,6 +124,7 @@ export class VersionCache {
       // Atomic rename only after the complete file is closed and source verified.
       const output=await open(temp,'r');try{await output.sync();}finally{await output.close();}
       return await this.exclusive(async()=>{
+        await chmod(temp,0o400);
         await rename(temp,target);
         const entry:Entry={key:id,file:target,size:file.size,digest:contentHash,readers:0,lastUsed:Date.now()};
         this.entries.set(id,entry);this.reserved-=file.size;reserved=false;return entry;

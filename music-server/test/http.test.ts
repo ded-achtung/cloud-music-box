@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { request, type IncomingMessage } from 'node:http';
 import { mkdtemp, mkdir, writeFile, rm, rename, readdir, readlink } from 'node:fs/promises';
-import { writeFileSync } from 'node:fs';
+import { readdirSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -82,11 +82,11 @@ test('in-place changes during playback do not mix old and new bytes', async () =
         writeFile(path.join(f.root,'a.wav'),wav(0x55)).then(()=>resolve(),reject);
       }); response.once('error',reject);
     });
-    response.resume(); data.push(await body(response)); assert.deepEqual(Buffer.concat(data),f.a);
     const changed=await get(f.base,url,{Range:'bytes=0-100','If-Range':oldTag!}); assert.equal(changed.statusCode,409); await body(changed);
     await f.catalog.scan(f.storage);
     const next=await get(f.base,url,{Range:'bytes=0-100','If-Range':oldTag!});
     assert.equal(next.statusCode,200); assert.notEqual(next.headers.etag,oldTag); assert.deepEqual(await body(next),wav(0x55));
+    response.resume(); data.push(await body(response)); assert.deepEqual(Buffer.concat(data),f.a);
     await assertNoDescriptors(f.root);
   } finally {await f.cleanup();}
 });
@@ -141,6 +141,8 @@ test('twenty concurrent listeners share one immutable cached version and report 
   const f=await start(); try {
     const cacheRoot=path.join(f.dir,'cache'), url=`/api/v1/tracks/${f.tracks[0].id}/stream`;
     const rssBefore=process.memoryUsage().rss, fdBefore=(await readdir('/proc/self/fd')).length;
+    let peakRss=rssBefore, peakFds=fdBefore;
+    const sampler=setInterval(()=>{peakRss=Math.max(peakRss,process.memoryUsage().rss);peakFds=Math.max(peakFds,readdirSync('/proc/self/fd').length);},2);sampler.unref();
     const coldStart=performance.now(); const cold=await get(f.base,url,{Range:'bytes=0-1023'});
     const coldMs=performance.now()-coldStart; assert.equal(cold.statusCode,206);assert.deepEqual(await body(cold),f.a.subarray(0,1024));
     const filesBefore=(await readdir(cacheRoot)).filter(s=>s.endsWith('.bin'));assert.equal(filesBefore.length,1);
@@ -154,8 +156,10 @@ test('twenty concurrent listeners share one immutable cached version and report 
     const infoAfter=await import('node:fs/promises').then(m=>m.stat(path.join(cacheRoot,filesAfter[0])));
     assert.equal(infoBefore.ino,infoAfter.ino);assert.equal(infoBefore.mtimeMs,infoAfter.mtimeMs);assert.equal(infoAfter.size,f.a.length);
     await assertNoDescriptors(f.root);
+    clearInterval(sampler);
     const rssAfter=process.memoryUsage().rss, fdAfter=(await readdir('/proc/self/fd')).length;
-    console.log(`CACHE_METRICS cold_ttfb_ms=${coldMs.toFixed(2)} warm_ttfb_ms=${warmMs.toFixed(2)} cache_bytes=${infoAfter.size} rss_before=${rssBefore} rss_after=${rssAfter} fds_before=${fdBefore} fds_after=${fdAfter}`);
+    assert.ok(peakRss-rssBefore < 128*1024*1024);
+    console.log(`CACHE_METRICS cold_ttfb_ms=${coldMs.toFixed(2)} warm_ttfb_ms=${warmMs.toFixed(2)} cache_bytes=${infoAfter.size} rss_before=${rssBefore} rss_peak=${peakRss} rss_after=${rssAfter} fds_before=${fdBefore} fds_peak=${peakFds} fds_after=${fdAfter}`);
   } finally {await f.cleanup();}
 });
 
