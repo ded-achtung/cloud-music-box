@@ -7,6 +7,10 @@ import androidx.media3.session.SessionToken
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.core.app.ActivityScenario
 import androidx.lifecycle.ViewModelProvider
+import android.view.ViewGroup
+import android.webkit.WebView
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicReference
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.*
@@ -86,6 +90,25 @@ class AndroidIntegrationTest {
                 assertSame(first,ViewModelProvider(it)[ControllerHolder::class.java].future)
                 assertEquals(2,player.mediaItemCount)
             }
+        } finally { scenario.close() }
+    }
+
+    @Test fun bundledReactUiLoadsWithRestrictedNativeBridge() {
+        val scenario=ActivityScenario.launch(MainActivity::class.java)
+        try {
+            lateinit var view: WebView
+            scenario.onActivity { view=it.findViewById<ViewGroup>(android.R.id.content).getChildAt(0) as WebView }
+            var loaded=false
+            repeat(100) {
+                val latch=CountDownLatch(1);val result=AtomicReference<String>()
+                InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                    view.evaluateJavascript("Boolean(window.NativeMusic && document.querySelector('header'))") { value -> result.set(value);latch.countDown() }
+                }
+                latch.await(3,TimeUnit.SECONDS)
+                if (result.get() == "true") { loaded=true; return@repeat }
+                Thread.sleep(100)
+            }
+            assertTrue("Bundled React UI or native bridge did not load",loaded)
         } finally { scenario.close() }
     }
 
