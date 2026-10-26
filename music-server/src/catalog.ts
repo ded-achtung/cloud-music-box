@@ -42,6 +42,7 @@ export class Catalog {
         const stream = handle.stream({ autoClose: false });
         const metadata = await parseStream(stream, { mimeType: formats[path.extname(entry.key).toLowerCase()], size: handle.size }, { duration: true });
         stream.destroy();
+        if (!metadata.format.container) throw new Error('Unrecognized or damaged audio container');
         if (!await handle.unchanged()) throw new Error('File changed during scan');
         const name = path.basename(entry.key);
         const title = metadata.common.title || name;

@@ -127,6 +127,9 @@ test('empty library, corrupt audio and inaccessible root', async () => {
     await writeFile(path.join(root,'corrupt.wav'),'this is not a wav');
     const scan=await catalog.scan(storage); assert.equal(scan.failed,1);assert.equal(scan.added,0);
     await assert.rejects(LocalStorage.create(path.join(dir,'does-not-exist')));
+    await rename(root, path.join(dir,'moved'));
+    await assert.rejects(catalog.scan(storage));
+    assert.equal((catalog.db.prepare('SELECT COUNT(*) AS n FROM tracks').get() as {n:number}).n,0);
     await assertNoDescriptors(root);
   } finally {await app.close();catalog.close();await rm(dir,{recursive:true,force:true});}
 });
