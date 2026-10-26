@@ -9,6 +9,9 @@ on:
   push:
     branches: ["main"]
 
+  # Build-only check for pull requests; deployment is skipped below
+  pull_request:
+
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
@@ -82,6 +85,8 @@ jobs:
 
   # Deployment job
   deploy:
+    # Pages is configured only in the upstream repository, not in forks
+    if: github.event_name != 'pull_request' && github.repository == 'ContentsViewer/cloud-music-box'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
