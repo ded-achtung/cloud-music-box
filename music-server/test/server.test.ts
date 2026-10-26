@@ -46,6 +46,8 @@ test('range, if-range, HEAD, errors, pagination and independent requests', async
     await f.catalog.scan(f.storage);
     const list=await f.app.inject({url:'/api/v1/tracks?limit=1'}); assert.equal(list.statusCode,200);
     const p=list.json(); assert.equal(p.items.length,1); assert.equal(p.pagination.nextOffset,1);
+    const secondPage=(await f.app.inject({url:'/api/v1/tracks?limit=1&offset=1'})).json();
+    const secondId=secondPage.items[0].id as string;
     const id=p.items[0].id as string, url=`/api/v1/tracks/${id}/stream`;
     const full=await f.app.inject({url}); assert.equal(full.statusCode,200); assert.deepEqual(full.rawPayload,f.first);
     const etag=full.headers.etag; assert.ok(etag); assert.equal(full.headers['accept-ranges'],'bytes');
@@ -59,6 +61,8 @@ test('range, if-range, HEAD, errors, pagination and independent requests', async
     const head=await f.app.inject({method:'HEAD',url,headers:{range:'bytes=0-3'}}); assert.equal(head.statusCode,200); assert.equal(Number(head.headers['content-length']),f.first.length); assert.equal(head.rawPayload.length,0);
     const parallel=await Promise.all(Array.from({length:20},(_,i)=>f.app.inject({url,headers:{range:`bytes=${i}-${i+9}`}})));
     parallel.forEach((r,i)=>{assert.equal(r.statusCode,206);assert.deepEqual(r.rawPayload,f.first.subarray(i,i+10));});
+    const different=await Promise.all([f.app.inject({url,headers:{range:'bytes=0-9'}}),f.app.inject({url:`/api/v1/tracks/${secondId}/stream`,headers:{range:'bytes=20-29'}})]);
+    assert.deepEqual(different[0].rawPayload,f.first.subarray(0,10)); assert.deepEqual(different[1].rawPayload,f.second.subarray(20,30));
     assert.equal((await f.app.inject({url:'/api/v1/tracks/missing'})).json().error.code,'TRACK_NOT_FOUND');
     assert.equal((await f.app.inject({url:'/api/v1/tracks?limit=0'})).json().error.code,'INVALID_REQUEST');
     assert.equal((await f.app.inject({url:'/updates/android/stable/manifest.json'})).statusCode,501);
@@ -68,7 +72,7 @@ test('range, if-range, HEAD, errors, pagination and independent requests', async
 
 test('symlinks, traversal, and replaced directories cannot escape root', async () => {
   const f=await fixture(); try {
-    const outside=path.join(f.dir,'secret.wav'); await writeFile(outside,wav());
+    const outside=path.join(f.dir,'secret.wav'); await writeFile(outside,wav()); await writeFile(path.join(f.dir,'song.wav'),wav());
     await symlink(outside,path.join(f.music,'escape.wav'));
     await symlink(f.dir,path.join(f.music,'external'));
     await mkdir(path.join(f.music,'inside')); await writeFile(path.join(f.music,'inside','song.wav'),wav());
