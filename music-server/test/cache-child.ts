@@ -1,0 +1,11 @@
+import { writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { VersionCache } from '../src/version-cache.js';
+import { LocalStorage } from '../src/storage.js';
+const [root, cacheRoot] = process.argv.slice(2);
+const cache=await VersionCache.open(cacheRoot,1024*1024*1024);
+const storage=await LocalStorage.create(root), file=await storage.open('a.wav');
+const lease=await cache.acquire(storage.sourceId,'a.wav',file);lease.release();await file.close();
+await writeFile(path.join(cacheRoot,'.part-interrupted'),'partial');
+process.stdout.write('READY\n');
+setInterval(()=>{},1000);

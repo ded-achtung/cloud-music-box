@@ -3,6 +3,7 @@ import path from 'node:path';
 import { Catalog } from './catalog.js';
 import { LocalStorage } from './storage.js';
 import { buildApp } from './app.js';
+import { VersionCache } from './version-cache.js';
 
 const root = process.env.MUSIC_ROOT;
 if (!root) throw new Error('Set MUSIC_ROOT to an existing music directory');
@@ -17,10 +18,14 @@ try {
   console.log('Library scan:', result);
   if (process.argv.includes('--scan')) { catalog.close(); }
   else {
-    const app = buildApp(catalog,storage);
-    app.addHook('onClose', async () => catalog.close());
+    const cacheRoot = path.resolve(process.env.MUSIC_CACHE_DIR || path.join(path.dirname(dbPath),'audio-cache'));
+    const cacheLimit = Number(process.env.MUSIC_CACHE_MAX_BYTES || String(1024*1024*1024));
+    const cache = await VersionCache.open(cacheRoot,cacheLimit);
+    const app = buildApp(catalog,storage,cache);
+    app.addHook('onClose', async () => { await cache.close(); catalog.close(); });
     const stop = () => { void app.close(); };
     process.once('SIGINT',stop); process.once('SIGTERM',stop);
-    await app.listen({host: process.env.HOST || '127.0.0.1',port});
+    try { await app.listen({host: process.env.HOST || '127.0.0.1',port}); }
+    catch (error) { await cache.close(); throw error; }
   }
 } catch (error) { catalog.close(); throw error; }
