@@ -47,3 +47,15 @@ npm test
 ```
 
 Tests generate WAV fixtures and use temporary SQLite databases. They exercise Fastify injection and real HTTP requests to an ephemeral localhost port, including 20 concurrent cold requests and SIGKILL recovery. The HTTP suite prints CACHE_METRICS with cold and warm time from request to first body byte (TTFB), cache bytes, RSS and process descriptor counts; results depend on CPU, filesystem and runner load. They exercise rescans, seek ranges, concurrent requests, errors, traversal and symlink escapes. A real Android client, physical network, reverse proxy, cloud sources, authentication and updater are outside this stage.
+
+Example CI measurement on GitHub Actions Ubuntu 24.04 / Node 24.21.0, using an 8,388,652-byte WAV and 20 concurrent local HTTP Range clients ([run](https://github.com/ded-achtung/cloud-music-box/actions/runs/40408937559)):
+
+| Metric | Result |
+| --- | ---: |
+| Cold time to first body byte | 24.00 ms |
+| Warm time to first body byte | 1.51 ms |
+| Data held on disk for the tested version | 8,388,652 bytes (one cached file) |
+| Process RSS before / sampled peak / after | 172,535,808 / 172,666,880 / 172,666,880 bytes |
+| Process file descriptors before / sampled peak / after | 28 / 60 / 28 |
+
+This is one in-process client-and-server sample, not a throughput benchmark or a prediction for real devices; RSS is sampled and includes the test clients and generated fixtures. Preparation and startup hash verification depend on track size and disk speed. If every client disconnects while a shared preparation is running, the bounded preparation can finish and remain reusable.
