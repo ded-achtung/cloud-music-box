@@ -18,8 +18,8 @@ jobs:
           node-version: '20'
           cache: npm
       - run: npm ci --no-audit --no-fund
-      - run: npm install --no-audit --no-fund --no-save --package-lock=false vite@5.4.21
-      - run: npx vite build --config android/vite.config.mjs
+      - run: npm install --prefix /tmp/android-vite --no-audit --no-fund vite@5.4.21
+      - run: /tmp/android-vite/node_modules/.bin/vite build --config android/vite.config.mjs
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

@@ -16,8 +16,8 @@ Install Node.js, Java 17, Android SDK 35 and Gradle 8.11.1. From the repository 
 
 ```sh
 npm ci
-npm install --no-save --package-lock=false vite@5.4.21
-npx vite build --config android/vite.config.mjs
+npm install --prefix /tmp/android-vite --no-audit --no-fund vite@5.4.21
+/tmp/android-vite/node_modules/.bin/vite build --config android/vite.config.mjs
 gradle -p android :app:assembleDebug :app:testDebugUnitTest
 ```
 
