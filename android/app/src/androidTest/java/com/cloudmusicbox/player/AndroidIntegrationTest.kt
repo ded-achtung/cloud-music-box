@@ -43,15 +43,27 @@ class AndroidIntegrationTest {
         instrumentation.runOnMainSync { future=MediaController.Builder(context,SessionToken(context,ComponentName(context,PlaybackService::class.java))).buildAsync() }
         val p=future.get(20,TimeUnit.SECONDS)
         try {
-            instrumentation.runOnMainSync {
-                p.setMediaItems(listOf(MediaItem.fromUri("http://127.0.0.1:1/a"),MediaItem.fromUri("http://127.0.0.1:1/b")))
-                assertEquals(2,p.mediaItemCount)
-                p.seekToNextMediaItem();assertEquals(1,p.currentMediaItemIndex)
-                p.seekToPreviousMediaItem();assertEquals(0,p.currentMediaItemIndex)
-                p.seekTo(1200);assertEquals(1200,p.currentPosition)
-                p.play();assertTrue(p.playWhenReady)
-                p.pause();assertFalse(p.playWhenReady)
+            fun waitFor(check: () -> Boolean) {
+                repeat(100) {
+                    var ready=false
+                    instrumentation.runOnMainSync { ready=check() }
+                    if (ready) return
+                    Thread.sleep(50)
+                }
+                throw AssertionError("MediaController state did not update")
             }
+            instrumentation.runOnMainSync { p.setMediaItems(listOf(MediaItem.fromUri("http://127.0.0.1:1/a"),MediaItem.fromUri("http://127.0.0.1:1/b"))) }
+            waitFor { p.mediaItemCount == 2 }
+            instrumentation.runOnMainSync { p.seekToNextMediaItem() }
+            waitFor { p.currentMediaItemIndex == 1 }
+            instrumentation.runOnMainSync { p.seekToPreviousMediaItem() }
+            waitFor { p.currentMediaItemIndex == 0 }
+            instrumentation.runOnMainSync { p.seekTo(1200) }
+            waitFor { p.currentPosition == 1200L }
+            instrumentation.runOnMainSync { p.play() }
+            waitFor { p.playWhenReady }
+            instrumentation.runOnMainSync { p.pause() }
+            waitFor { !p.playWhenReady }
         } finally { instrumentation.runOnMainSync { MediaController.releaseFuture(future) } }
     }
     @Test fun retainsQueueAcrossActivityRecreation() {
@@ -62,6 +74,12 @@ class AndroidIntegrationTest {
             val player=first.get(20,TimeUnit.SECONDS)
             InstrumentationRegistry.getInstrumentation().runOnMainSync {
                 player.setMediaItems(listOf(MediaItem.fromUri("http://127.0.0.1:1/a"),MediaItem.fromUri("http://127.0.0.1:1/b")))
+            }
+            repeat(100) {
+                var ready=false
+                InstrumentationRegistry.getInstrumentation().runOnMainSync { ready=player.mediaItemCount == 2 }
+                if (ready) return@repeat
+                Thread.sleep(50)
             }
             scenario.recreate()
             scenario.onActivity {
