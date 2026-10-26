@@ -10,7 +10,7 @@ Ubuntu service for a shared catalogue and independent HTTP audio streams. Node.j
 
 ```sh
 cd music-server
-npm install
+npm ci
 npm run build
 MUSIC_ROOT="$HOME/Music" npm start
 ```
@@ -36,7 +36,7 @@ curl -H 'Range: bytes=1024-' -H 'If-Range: "ETAG_FROM_HEAD"' http://127.0.0.1:30
 
 `server-info` publishes the API major/minor and capabilities. List responses contain `items` and `pagination` (`limit`, `offset`, `nextOffset`). Limit is 1–100. Offset pagination can move if a scan changes the catalogue between requests. Errors are `{ "error": { "code": "...", "message": "..." } }`. The update manifest route is reserved and returns 501.
 
-Single byte ranges use 206, unsatisfiable ranges use 416, and unrecognized/multiple range headers are ignored with 200. HEAD returns the full representation's headers. Matching strong `If-Range` ETags permit a partial response; all other If-Range values fall back to the full representation. The stream does not load the file into memory. Sources have an independent `StorageAdapter` contract; cloud providers are not implemented.
+Single byte ranges use 206, unsatisfiable ranges use 416, and unrecognized/multiple range headers are ignored with 200. HEAD returns the full representation's headers. Matching strong `If-Range` ETags permit a partial response; all other If-Range values fall back to the full representation. Before every GET the server copies the entire source to a private temporary disk snapshot and checks the source version before sending headers; the client then reads only the requested bytes. This avoids mixing bytes if a source is edited during playback, but increases first-byte latency, disk I/O, and temporary disk use (up to one full file per concurrent stream). Set TMPDIR to a private local filesystem with enough free space; normal completion and disconnect remove snapshots. If the process crashes during snapshot creation, private temporary directories may remain and need cleanup. The audio file is not loaded wholly into RAM. Sources have an independent `StorageAdapter` contract; cloud providers are not implemented.
 
 ## Tests
 
@@ -44,4 +44,4 @@ Single byte ranges use 206, unsatisfiable ranges use 416, and unrecognized/multi
 npm test
 ```
 
-Tests generate WAV fixtures, use temporary SQLite databases and call Fastify's in-process injection. They exercise rescans, seek ranges, concurrent requests, errors, traversal and symlink escapes. A real Android client, physical network, reverse proxy, cloud sources, authentication and updater are outside this stage.
+Tests generate WAV fixtures and use temporary SQLite databases. They exercise both Fastify injection and real HTTP requests to an ephemeral localhost port. They exercise rescans, seek ranges, concurrent requests, errors, traversal and symlink escapes. A real Android client, physical network, reverse proxy, cloud sources, authentication and updater are outside this stage.

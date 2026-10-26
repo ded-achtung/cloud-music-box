@@ -1,5 +1,10 @@
 import Fastify from 'fastify';
 import { createHash } from 'node:crypto';
+import { createWriteStream } from 'node:fs';
+import { mkdtemp, open, rm, unlink } from 'node:fs/promises';
+import { pipeline } from 'node:stream/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { Catalog, trackDTO, type TrackRow } from './catalog.js';
 import type { StorageAdapter } from './storage.js';
 
@@ -31,6 +36,7 @@ export function buildApp(catalog: Catalog, storage: StorageAdapter) {
   app.setErrorHandler((err, _req, reply) => {
     const e = err instanceof ApiError ? err : new ApiError(500, 'INTERNAL_ERROR', 'Internal server error');
     if (e.status === 500) app.log.error(err);
+    reply.removeHeader('Content-Range').removeHeader('Content-Length').type('application/json');
     void reply.code(e.status).send({ error: { code: e.code, message: e.message } });
   });
   app.setNotFoundHandler((_req, reply) => reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Resource not found' } }));
@@ -75,13 +81,41 @@ export function buildApp(catalog: Catalog, storage: StorageAdapter) {
         await file.close();
         return reply.code(416).type('application/json').header('Content-Range',`bytes */${size}`).send({error:{code:'RANGE_NOT_SATISFIABLE',message:'Range not satisfiable'}});
       }
-      if (range !== 'ignore') {
-        reply.code(206).header('Content-Range',`bytes ${range.start}-${range.end}/${size}`).header('Content-Length', range.end-range.start+1);
-      } else reply.header('Content-Length',size);
-      if (req.method === 'HEAD' || size === 0) { await file.close(); return reply.send(); }
-      const body = file.stream({start:range === 'ignore' ? 0 : range.start, end:range === 'ignore' ? size-1 : range.end, autoClose:true});
-      reply.raw.on('close', () => body.destroy());
-      return reply.send(body);
+      if (req.method === 'HEAD' || size === 0) {
+        await file.close();
+        return reply.header('Content-Length',size).send();
+      }
+      // Copy to a private disk snapshot before sending headers. An open file
+      // descriptor alone does not prevent in-place writes to the source inode.
+      const abort = new AbortController();
+      const cancel = () => abort.abort();
+      reply.raw.once('close', cancel);
+      let dir: string | undefined;
+      let snapshot: Awaited<ReturnType<typeof open>> | undefined;
+      try {
+        dir = await mkdtemp(path.join(os.tmpdir(),'music-server-stream-'));
+        const snapshotPath = path.join(dir,'audio');
+        await pipeline(file.stream({ autoClose: false }),
+          createWriteStream(snapshotPath, { flags: 'wx', mode: 0o600 }), { signal: abort.signal });
+        if (!await file.unchanged()) throw new ApiError(409,'TRACK_CHANGED','Track changed; rescan library');
+        snapshot = await open(snapshotPath,'r');
+        if ((await snapshot.stat()).size !== size) throw new ApiError(409,'TRACK_CHANGED','Track changed; rescan library');
+        await unlink(snapshotPath); // FD owns the snapshot, including on client disconnect.
+        await rm(dir, {recursive:true,force:true}); dir = undefined;
+        await file.close();
+        if (abort.signal.aborted) throw new Error('Client disconnected');
+        if (range !== 'ignore') {
+          reply.code(206).header('Content-Range',`bytes ${range.start}-${range.end}/${size}`).header('Content-Length', range.end-range.start+1);
+        } else reply.header('Content-Length',size);
+        const body = snapshot.createReadStream({start:range === 'ignore' ? 0 : range.start, end:range === 'ignore' ? size-1 : range.end, autoClose:true});
+        snapshot = undefined;
+        reply.raw.once('close', () => body.destroy());
+        return reply.send(body);
+      } finally {
+        reply.raw.removeListener('close', cancel);
+        await snapshot?.close().catch(() => {});
+        if (dir) await rm(dir,{recursive:true,force:true});
+      }
     } catch (error) { await file.close().catch(() => {}); throw error; }
   };
   app.route({ method: ['GET','HEAD'], url: '/api/v1/tracks/:id/stream', handler: stream });
