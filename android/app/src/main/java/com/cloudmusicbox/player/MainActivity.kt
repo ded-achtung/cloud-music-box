@@ -1,6 +1,5 @@
 package com.cloudmusicbox.player
 
-import android.content.ComponentName
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
@@ -11,12 +10,12 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
+import androidx.lifecycle.ViewModelProvider
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
-import androidx.media3.session.SessionToken
 import androidx.webkit.JavaScriptReplyProxy
 import androidx.webkit.WebMessageCompat
 import androidx.webkit.WebViewAssetLoader
@@ -41,7 +40,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         server = getPreferences(MODE_PRIVATE).getString("server", "") ?: ""
-        future = MediaController.Builder(this, SessionToken(this, ComponentName(this, PlaybackService::class.java))).buildAsync()
+        future = ViewModelProvider(this)[ControllerHolder::class.java].future
         future.addListener({ try { controller = future.get() } catch (_: Exception) { } }, Executor { main.post(it) })
         val loader = WebViewAssetLoader.Builder().addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this)).build()
         web = WebView(this)
@@ -140,7 +139,6 @@ class MainActivity : ComponentActivity() {
             .put("positionMs",p.currentPosition).put("durationMs",duration).put("error",p.playerError?.message ?: "")
     }
     override fun onDestroy() {
-        MediaController.releaseFuture(future)
         io.shutdownNow(); web.destroy(); controller = null
         super.onDestroy()
     }
