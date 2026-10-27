@@ -43,6 +43,7 @@
   ],
   "exclude": [
     "node_modules",
-    "music-server"
+    "music-server",
+    "android"
   ]
 }
