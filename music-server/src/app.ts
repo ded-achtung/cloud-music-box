@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { Transform, pipeline } from 'node:stream';
 import { Catalog, trackDTO, type TrackRow } from './catalog.js';
 import type { StorageAdapter } from './storage.js';
+import type { Library } from './library.js';
 
 class ApiError extends Error { constructor(public status: number, public code: string, message: string) { super(message); } }
 const bad = (message: string) => new ApiError(400, 'INVALID_REQUEST', message);
@@ -27,7 +28,7 @@ export function parseRange(header: string, size: number): ByteRange {
   if (size === 0 || (a === undefined && b === 0) || (a !== undefined && (a >= size || (b !== undefined && b < a)))) return 'unsatisfiable';
   return a === undefined ? { start: Math.max(0, size - b!), end: size - 1 } : { start: a, end: Math.min(b ?? size - 1, size - 1) };
 }
-export function buildApp(catalog: Catalog, storage: StorageAdapter) {
+export function buildApp(catalog: Catalog, storage: StorageAdapter, library?: Library) {
   const app = Fastify({ logger: false, exposeHeadRoutes: false });
   app.setErrorHandler((err, _req, reply) => {
     const e = err instanceof ApiError ? err : new ApiError(500, 'INTERNAL_ERROR', 'Internal server error');
@@ -36,7 +37,8 @@ export function buildApp(catalog: Catalog, storage: StorageAdapter) {
     void reply.code(e.status).send({ error: { code: e.code, message: e.message } });
   });
   app.setNotFoundHandler((_req, reply) => reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Resource not found' } }));
-  app.get('/api/v1/server-info', async () => ({ name: 'cloud-music-server', version: '0.1.0', api: { major: 1, minor: 0, basePath: '/api/v1' }, capabilities: { range: true, localStorage: true, artwork: true, apkUpdates: false }, authentication: 'none' }));
+  app.get('/api/v1/server-info', async () => ({ name: 'cloud-music-server', version: '0.1.0', api: { major: 1, minor: 1, basePath: '/api/v1' }, capabilities: { range: true, localStorage: true, artwork: true, apkUpdates: false, liveRescan: !!library }, authentication: 'none',
+    ...(library ? { library: library.status() } : {}) }));
   app.get('/api/v1/tracks', async req => {
     const {limit, offset} = page(req.query);
     const rows = catalog.db.prepare('SELECT * FROM tracks ORDER BY title COLLATE NOCASE,id LIMIT ? OFFSET ?').all(limit + 1, offset) as unknown as TrackRow[];
